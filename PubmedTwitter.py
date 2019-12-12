@@ -1,6 +1,8 @@
 import os
 import random
+from datetime import date
 
+import pandas as pd
 import tweepy as tw
 from pymed import PubMed
 from pymed.article import PubMedArticle
@@ -13,6 +15,10 @@ access_secret = str(os.getenv("ACCESS_SECRET"))
 
 auth = tw.OAuthHandler(consumer_key, consumer_secret)
 
+api = tw.API(auth, wait_on_rate_limit=True)
+
+day = date.today().weekday()
+
 try:
     redirect_url = auth.get_authorization_url()
     print("Log in with this link: " + redirect_url)
@@ -20,12 +26,6 @@ try:
     auth.get_access_token(verifier=verifier)
 except tw.TweepError:
     print("An error occurred during authorization!")
-
-topic = input("What would you like to post about?: ")
-
-api = tw.API(auth, wait_on_rate_limit=True)
-pubmed = PubMed(tool=str(os.getenv("APP_NAME")), email=str(os.getenv("APP_EMAIL")))
-results = pubmed.query(topic, max_results=100)
 
 articles = []
 selected_articles = []
@@ -53,27 +53,69 @@ def build_tweet(article: PubMedArticle) -> []:
         if len(tt) >= 240:
             print("Found extra long tweet!" + " " + str(len(tt)))
             tt = "Title: " + title[0:100] + "..." + '\n\n' + "Link: " + link
-            print(tt)
 
     return [tt, "Abstract: " + abstract]
 
 
 def send_tweets(components: []):
-    title_tweet = api.update_status(status=components[0])
-    api.update_status(status=components[1], in_reply_to_status_id=title_tweet.id)
+    try:
+        title_tweet = api.update_status(status=components[0])
+        api.update_status(status=components[1], in_reply_to_status_id=title_tweet.id)
+    except tw.TweepError as error:
+        pass
 
+def pre_frame_all_tweets() -> {}:
+    tweet_ids = []
+    tweet_interactions = []
 
-for article in results:
-    articles.append(article)
+    all_tweets = tw.Cursor(api.user_timeline).items()
 
-for count in range(0, 5):
-    chosen_article = articles[random.randrange(0, 100)]
+    for tweet in all_tweets:
+        all_interactions = tweet.retweet_count + tweet.favorite_count
 
-    if chosen_article not in selected_articles:
-        selected_articles.append(chosen_article)
+        tweet_ids.append(tweet.id)
+        tweet_interactions.append(all_interactions)
 
-for art in selected_articles:
-    tweet = build_tweet(art)
-    send_tweets(tweet)
+    return {"Tweet ID": tweet_ids, "Tweet Interactions": all_interactions}
 
-print("Successfully sent tweets!")
+def main():
+    mode = int(input("Select a mode (1 - Data test | 2 - Post): "))
+
+    if mode == 1:
+        data = pre_frame_all_tweets()
+        tweet_frame = pd.DataFrame(data)
+
+        print(tweet_frame.head(15))
+    elif mode == 2:
+        topic = input("What would you like to post about?: ")
+        pubmed = PubMed(tool=str(os.getenv("APP_NAME")), email=str(os.getenv("APP_EMAIL")))
+        results = pubmed.query(topic, max_results=100)
+
+        for article in results:
+            articles.append(article)
+
+        for count in range(0, 5):
+            chosen_article = articles[random.randrange(0, len(articles))]
+
+            if chosen_article not in selected_articles:
+                selected_articles.append(chosen_article)
+
+        for art in selected_articles:
+            tweet = build_tweet(art)
+            send_tweets(tweet)
+
+        print("Successfully sent tweets!")
+
+        if input("Run again? (Y/N): ").capitalize() == "Y":
+            main()
+        else:
+            print("Exiting!")
+    else:
+        print("Invalid input! Use 1 or 2!")
+    if input("Run again? (Y/N): ").capitalize() == "Y":
+        main()
+    else:
+        print("Exiting!")
+
+if __name__ == '__main__':
+    main()

@@ -1,6 +1,7 @@
 import os
 import random
 from datetime import date
+import unicodedata
 
 import pandas as pd
 import tweepy as tw
@@ -19,13 +20,43 @@ api = tw.API(auth, wait_on_rate_limit=True)
 
 day = date.today().weekday()
 
-try:
-    redirect_url = auth.get_authorization_url()
-    print("Log in with this link: " + redirect_url)
-    verifier = input("Verification Code: ")
-    auth.get_access_token(verifier=verifier)
-except tw.TweepError:
-    print("An error occurred during authorization!")
+
+def load_account_data() -> pd.DataFrame:
+    data = None
+
+    try:
+        data = pd.read_csv("account.csv")
+    except IOError:
+        print("Accounts file does not exist! Will create new one.")
+
+    return data
+
+
+def login(account_data: pd.DataFrame):
+    if account_data is None or account_data.empty:
+        try:
+            redirect_url = auth.get_authorization_url()
+            print("Log in with this link: " + redirect_url)
+            verifier = input("Verification Code: ")
+            auth.get_access_token(verifier=verifier)
+
+            # String access token
+            a_t = str(unicodedata.normalize('NFKD', auth.access_token).encode("ascii", "ignore"))
+
+            # String access secret
+            a_s = str(unicodedata.normalize('NFKD', auth.access_token_secret).encode("ascii", "ignore"))
+
+            account_data = pd.DataFrame(data={"access_token": a_t, "access_secret":
+                a_s}, index=["value"])
+            pd.DataFrame(account_data).to_csv("account.csv")
+        except tw.TweepError or IOError:
+            print("An error occurred during authorization!")
+    else:
+        a_t = str(account_data.iat[0, 1]).replace('b', '', 1).replace("'", "")
+        a_s = str(account_data.iat[0, 2]).replace('b', '', 1).replace("'", "")
+
+        auth.set_access_token(a_t, a_s)
+
 
 articles = []
 selected_articles = []
@@ -47,22 +78,21 @@ def build_tweet(article: PubMedArticle) -> []:
     tt = "Title: " + title_date + '\n\n' + "Link: " + link
 
     if len(tt) >= 240:
-        print("Found long tweet!")
-
-        tt = "Title: " + title[0:239] + '\n\n' + "Link: " + link
-        if len(tt) >= 240:
-            print("Found extra long tweet!" + " " + str(len(tt)))
-            tt = "Title: " + title[0:100] + "..." + '\n\n' + "Link: " + link
+        tt = -1
 
     return [tt, "Abstract: " + abstract]
 
 
 def send_tweets(components: []):
     try:
-        title_tweet = api.update_status(status=components[0])
-        api.update_status(status=components[1], in_reply_to_status_id=title_tweet.id)
+        if components[0] != -1:
+            title_tweet = api.update_status(status=components[0])
+            api.update_status(status=components[1], in_reply_to_status_id=title_tweet.id)
+        else:
+            pass
     except tw.TweepError as error:
-        pass
+        print(error)
+
 
 def pre_frame_all_tweets() -> {}:
     tweet_ids = []
@@ -78,7 +108,10 @@ def pre_frame_all_tweets() -> {}:
 
     return {"Tweet ID": tweet_ids, "Tweet Interactions": all_interactions}
 
+
 def main():
+    login(load_account_data())
+
     mode = int(input("Select a mode (1 - Data test | 2 - Post): "))
 
     if mode == 1:
@@ -103,13 +136,6 @@ def main():
         for art in selected_articles:
             tweet = build_tweet(art)
             send_tweets(tweet)
-
-        print("Successfully sent tweets!")
-
-        if input("Run again? (Y/N): ").capitalize() == "Y":
-            main()
-        else:
-            print("Exiting!")
     else:
         print("Invalid input! Use 1 or 2!")
     if input("Run again? (Y/N): ").capitalize() == "Y":
@@ -117,5 +143,9 @@ def main():
     else:
         print("Exiting!")
 
+
 if __name__ == '__main__':
+    print("=======================================\n",
+          "        Canary Curator            ",
+          "\n=======================================")
     main()
